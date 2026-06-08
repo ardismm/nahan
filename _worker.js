@@ -5,11 +5,11 @@ import { connect } from "cloudflare:sockets";
  * Handles real-time binary streams from remote sensor nodes.
  */
 
-const CURRENT_VERSION = "2.3.2";
+const CURRENT_VERSION = "2.3.2-a";
 
-const getAlpha = () => String.fromCharCode(118, 108, 101, 115, 115);
-const getBeta = () => String.fromCharCode(116, 114, 111, 106, 97, 110);
-const getGamma = () => String.fromCharCode(99, 108, 97, 115, 104);
+const getAlpha = () => "vless";
+const getBeta  = () => "trojan";
+const getGamma = () => "clash";
 
 const SYSTEM_DEFAULTS = {
     apiRoute: "sync",
@@ -44,7 +44,17 @@ let isolateStartTime = Date.now();
 let activeConnections = 0;
 let uuidUsage = new Map();
 let activeDeviceId = "";
+// Place after: let activeDeviceId = "";
+const loginAttempts = new Map();
 
+function checkRateLimit(ip) {
+    const now = Date.now();
+    const entry = loginAttempts.get(ip) || { count: 0, resetAt: now + 60000 };
+    if (now > entry.resetAt) { entry.count = 0; entry.resetAt = now + 60000; }
+    entry.count++;
+    loginAttempts.set(ip, entry);
+    return entry.count > 5;
+}
 let sysUsageCache = { users: {} };
 let lastSysUsageSync = 0;
 
@@ -158,6 +168,11 @@ export default {
         try {
             await loadSysConfig(env);
             activeDeviceId = sysConfig.deviceId || generateHardwareId(sysConfig.apiRoute);
+            // Place after: activeDeviceId = sysConfig.deviceId || generateHardwareId(sysConfig.apiRoute);
+
+if (sysConfig.masterKey === "admin" && reqPath !== routes.dash) {
+    return new Response("Setup required: change master key from default.", { status: 403 });
+}
 
             const url = new URL(request.url);
             const upgradeHeader = request.headers.get("Upgrade");
@@ -376,6 +391,19 @@ async function handleLogs(request, env) {
     try {
         if (request.method === "POST") {
             const data = await request.json();
+            // Place after: const data = await request.json();
+
+function validateConfig(config) {
+    if (!config) return "No config provided";
+    if (config.masterKey && config.masterKey.length < 8) return "Master key too short (min 8 chars)";
+    if (config.apiRoute && config.apiRoute.length < 4) return "API route too short (min 4 chars)";
+    return null;
+}
+
+const validationError = validateConfig(data.config);
+if (validationError) {
+    return new Response(JSON.stringify({ success: false, msg: validationError }), { status: 400 });
+}
             if (data.key !== sysConfig.masterKey) return new Response(JSON.stringify({ success: false }), { status: 401 });
             let logs = [];
             if (env.IOT_DB) {
@@ -422,8 +450,7 @@ async function handleConfigSync(request, env, ctx) {
     try {
         const data = await request.json();
         const isAuthorized = (data.key === sysConfig.masterKey) || 
-                             (data.oldKey && data.oldKey === sysConfig.masterKey) || 
-                             (sysConfig.masterKey === "admin");
+                     (data.oldKey && data.oldKey === sysConfig.masterKey);
         if (!isAuthorized) return new Response(JSON.stringify({ success: false }), { status: 401 });
         if (!env.IOT_DB) return new Response(JSON.stringify({ success: false, msg: "DB Error" }), { status: 400 });
         const nextConfig = { ...sysConfig, ...data.config };
